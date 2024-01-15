@@ -150,12 +150,12 @@ model_type = "Flan T5 Large Stacked Samsum 1k"
 load_model(model_type, chatf.gpu_layers, chatf.gpu_config, chatf.cpu_config, chatf.torch_device)
 
 model_type = "Long T5 Global Base 16k Book Summary"
-load_model(model_type, 0, chatf.gpu_config, chatf.cpu_config, chatf.torch_device)
+load_model(model_type, chatf.gpu_layers, chatf.gpu_config, chatf.cpu_config, chatf.torch_device)
 
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
 
-def summarise_text(text, text_df, length_slider, in_colname, model_type):      
+def summarise_text(text, text_df, length_slider, in_colname, model_type, progress=gr.Progress()):      
          
         if text_df.empty:
             in_colname="text"
@@ -164,15 +164,30 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type):
             in_text_df = pd.DataFrame({in_colname_list_first:[text]})
             
         else: 
-            in_text_df = text_df #pd.read_csv(text_df.name, delimiter = ",", low_memory=False, encoding='cp1252')
-            in_colname_list_first = in_colname.tolist()[0][0]
+            in_text_df = text_df
+            in_colname_list_first = in_colname
 
         print(model_type)
 
-        if model_type != "Mistral Nous Capybara 4k (larger, slow)":
-            summarised_text = chatf.model(list(in_text_df[in_colname_list_first]), max_length=length_slider)
+        texts_list = list(in_text_df[in_colname_list_first])
 
-            print(summarised_text)
+        if model_type != "Mistral Nous Capybara 4k (larger, slow)":
+            summarised_texts = []
+
+            for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
+                summarised_text = chatf.model(single_text, max_length=length_slider)
+
+                #print(summarised_text)
+
+                summarised_text_str = summarised_text[0]['summary_text']
+
+                summarised_texts.append(summarised_text_str)
+
+                print(summarised_text_str)
+
+                #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
+
+            #print(summarised_texts)
 
         if model_type == "Mistral Nous Capybara 4k (larger, slow)":
 
@@ -180,47 +195,52 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type):
 
             from chatfuncs.prompts import nous_capybara_prompt
 
-            formatted_string = nous_capybara_prompt.format(length=length, text=text)
-            #formatted_string = open_hermes_prompt.format(length=length, text=text)
+            summarised_texts = []
 
-            # print(formatted_string)
+            for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
 
-            #for output in chatf.model(formatted_string, max_length = 1000):#, stream=True):
-            for output in chatf.model(formatted_string, max_length = 10000):#, stream=True):
-                print(output, end="", flush=True)
+                formatted_string = nous_capybara_prompt.format(length=length, text=single_text)
 
-            output_str = output['generated_text']
+                # print(formatted_string)
+                output = chatf.model(formatted_string, max_length = 10000)
 
-            # Find the index of 'ASSISTANT: ' to select only text after this location
-            index = output_str.find('ASSISTANT: ')
+                #for output in chatf.model(formatted_string, max_length = 10000):#, stream=True):
+                #    print(output, end="", flush=True)
 
-            # Check if 'ASSISTANT: ' is found in the string
-            if index != -1:
-                # Add the length of 'ASSISTANT: ' to the index to start from the end of this substring
-                start_index = index + len('ASSISTANT: ')
+                print(output)
+
+                output_str = output[0]['generated_text']
+
+                # Find the index of 'ASSISTANT: ' to select only text after this location
+                index = output_str.find('ASSISTANT: ')
+
+                # Check if 'ASSISTANT: ' is found in the string
+                if index != -1:
+                    # Add the length of 'ASSISTANT: ' to the index to start from the end of this substring
+                    start_index = index + len('ASSISTANT: ')
+                    
+                    # Slice the string from this point to the end
+                    assistant_text = output_str[start_index:]
+                else:
+                    assistant_text = "ASSISTANT: not found in text"
+
+                print(assistant_text)
+
+                summarised_texts.append(assistant_text)
+
+                #print(summarised_text)
                 
-                # Slice the string from this point to the end
-                assistant_text = output_str[start_index:]
-            else:
-                assistant_text = "ASSISTANT: not found in text"
-
-            print(assistant_text)
-
-            summarised_text = assistant_text#chatf.model(formatted_string, max_length = 1000)#, max_new_tokens=length_slider)
-
-            #summarised_text = "Mistral Nous Capybara 4k summaries currently not working. Sorry!"
-
-            #rint(summarised_text)
+                #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
 
         if text_df.empty:
             if model_type != "Mistral Nous Capybara 4k (larger, slow)":
-                summarised_text_out = summarised_text[0].values()
+                summarised_text_out = summarised_texts[0]#.values()
 
             if model_type == "Mistral Nous Capybara 4k (larger, slow)":
-                summarised_text_out = summarised_text
+                summarised_text_out = summarised_texts[0]
 
         else: 
-            summarised_text_out = [d['summary_text'] for d in summarised_text] #summarised_text[0].values()
+            summarised_text_out = summarised_texts #[d['summary_text'] for d in summarised_texts] #summarised_text[0].values()
 
         output_name = "summarise_output_" + today_rev + ".csv"
         output_df = pd.DataFrame({"Original text":in_text_df[in_colname_list_first],
@@ -253,10 +273,8 @@ with block:
             in_text = gr.Textbox(label="Copy and paste your open text here", lines = 5)
             
         with gr.Accordion("Summarise open text from a file", open = False):
-            in_text_df = gr.File(label="Input text from file")
-            in_colname = gr.Dataframe(label="Write the column name for the open text to summarise",
-                                    type="numpy", row_count=(1,"fixed"), col_count = (1,"fixed"),
-                                headers=["Open text column name"])#, "Address column name 2", "Address column name 3", "Address column name 4"])
+            in_text_df = gr.File(label="Input text from file", file_count='multiple')
+            in_colname = gr.Dropdown(label="Write the column name for the open text to summarise")
     
         with gr.Row():
             summarise_btn = gr.Button("Summarise")
