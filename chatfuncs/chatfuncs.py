@@ -33,13 +33,12 @@ print("CPU threads:", threads)
 temperature: float = 0.1
 top_k: int = 3
 top_p: float = 1
-repetition_penalty: float = 1.3
-flan_alpaca_repetition_penalty: float = 1.3
+repetition_penalty: float = 1.05 #1.3
 last_n_tokens: int = 64
-max_new_tokens: int = 256
+max_new_tokens: int = 4096 # 200
 seed: int = 42
-reset: bool = False
-stream: bool = True
+reset: bool = True
+stream: bool = False
 threads: int = threads
 batch_size:int = 256
 context_length:int = 4096
@@ -68,7 +67,7 @@ class CtransInitConfig_gpu:
         self.max_new_tokens = max_new_tokens
         self.seed = seed
         self.reset = reset
-        self.stream = stream
+        self.stream = True #stream
         self.threads = threads
         self.batch_size = batch_size
         self.context_length = context_length
