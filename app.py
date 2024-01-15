@@ -1,28 +1,13 @@
 import gradio as gr
 from datetime import datetime
 import pandas as pd
-from transformers import pipeline
-# # Load in packages
-
-# +
+from transformers import pipeline, AutoTokenizer
 import os
-
-# Need to overwrite version of gradio present in Huggingface spaces as it doesn't have like buttons/avatars (Oct 2023)
-#os.system("pip uninstall -y gradio")
-#os.system("pip install gradio==3.50.0")
-
-
-
 from typing import Type
-#from langchain.embeddings import HuggingFaceEmbeddings#, HuggingFaceInstructEmbeddings
-#from langchain.vectorstores import FAISS
 import gradio as gr
-
-from transformers import AutoTokenizer
-
-# Alternative model sources
 import ctransformers
-
+# Concurrent futures is used to cancel processes that are taking too long
+import concurrent.futures
 
 PandasDataFrame = Type[pd.DataFrame]
 
@@ -191,6 +176,14 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type, progres
 
         if model_type == "Mistral Nous Capybara 4k (larger, slow)":
 
+
+            # Define a function that calls your model
+            def call_model(formatted_string, max_length=10000):
+                return chatf.model(formatted_string, max_length=max_length)
+
+            # Set your timeout duration (in seconds)
+            timeout_duration = 300  # Adjust this value as needed
+
             length = str(length_slider)
 
             from chatfuncs.prompts import nous_capybara_prompt
@@ -201,11 +194,16 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type, progres
 
                 formatted_string = nous_capybara_prompt.format(length=length, text=single_text)
 
-                # print(formatted_string)
-                output = chatf.model(formatted_string, max_length = 10000)
-
-                #for output in chatf.model(formatted_string, max_length = 10000):#, stream=True):
-                #    print(output, end="", flush=True)
+                # Use ThreadPoolExecutor to enforce a timeout
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(call_model, formatted_string, 10000)
+                    try:
+                        output = future.result(timeout=timeout_duration)
+                        # Process the output here
+                    except concurrent.futures.TimeoutError:
+                        error_text = f"Timeout (five minutes) occurred for text: {single_text}. Consider using a smaller model."
+                        print(error_text)
+                        return error_text, None
 
                 print(output)
 
@@ -233,11 +231,11 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type, progres
                 #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
 
         if text_df.empty:
-            if model_type != "Mistral Nous Capybara 4k (larger, slow)":
-                summarised_text_out = summarised_texts[0]#.values()
+            #if model_type != "Mistral Nous Capybara 4k (larger, slow)":
+            summarised_text_out = summarised_texts[0]#.values()
 
-            if model_type == "Mistral Nous Capybara 4k (larger, slow)":
-                summarised_text_out = summarised_texts[0]
+            #if model_type == "Mistral Nous Capybara 4k (larger, slow)":
+            #    summarised_text_out = summarised_texts[0]
 
         else: 
             summarised_text_out = summarised_texts #[d['summary_text'] for d in summarised_texts] #summarised_text[0].values()
@@ -263,7 +261,7 @@ with block:
     gr.Markdown(
     """
     # Text summariser
-    Enter open text below to get a summary. You can copy and paste text directly, or upload a file and specify the column that you want to summarise. The default small model will be able to summarise up to about 16,00 words, but the quality may not be great. The larger model around 900 words of better quality. Summarisation with Mistral Nous Capybara 4k works on up to around 4,000 words, and may give a higher quality summary, but will be slow, and it may not respect your desired maximum word count.
+    Enter open text below to get a summary. You can copy and paste text directly, or upload a file and specify the column that you want to summarise. The default small model will be able to summarise up to about 16,000 words, but the quality may not be great. The larger model around 900 words of better quality. Summarisation with Mistral Nous Capybara 4k works on up to around 4,000 words, and may give a higher quality summary, but will be slow, and it may not respect your desired maximum word count.
     """)    
     
     with gr.Tab("Summariser"):
@@ -278,6 +276,7 @@ with block:
     
         with gr.Row():
             summarise_btn = gr.Button("Summarise")
+            stop = gr.Button(value="Interrupt processing", variant="secondary", scale=0)
             length_slider = gr.Slider(minimum = 30, maximum = 500, value = 100, step = 10, label = "Maximum length of summary")
         
         with gr.Row():
@@ -301,9 +300,14 @@ with block:
 
     change_model_button.click(fn=load_model, inputs=[model_choice, gpu_layer_choice], outputs = [model_type_state, load_text, current_model])
 
-    summarise_btn.click(fn=summarise_text, inputs=[in_text, data_state, length_slider, in_colname, model_type_state],
+    summarise_click = summarise_btn.click(fn=summarise_text, inputs=[in_text, data_state, length_slider, in_colname, model_type_state],
                         outputs=[output_single_text, output_file], api_name="summarise_single_text")
+    summarise_enter = summarise_btn.click(fn=summarise_text, inputs=[in_text, data_state, length_slider, in_colname, model_type_state],
+                        outputs=[output_single_text, output_file])
     
+    # Stop processing if it's taking too long
+    stop.click(fn=None, inputs=None, outputs=None, cancels=[summarise_click, summarise_enter])
+
     # Dummy function to allow dropdown modification to work correctly (strange thing needed for Gradio 3.50, will be deprecated upon upgrading Gradio version)
     in_colname.change(dummy_function, in_colname, None)
 
