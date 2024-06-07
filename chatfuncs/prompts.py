@@ -28,3 +28,13 @@ ASSISTANT:"""
 
 nous_capybara_prompt = """USER:Summarise the following text in less than {length} words "{text}"
 ASSISTANT:"""
+
+instruction_prompt_phi3 = """<|user|>\n
+Summarise the following text in less than {length} words: "{text}"\n
+Summary:<|end|>\n
+<|assistant|>"""
+
+instruction_prompt_llama3 = """<|start_header_id|>system<|end_header_id|>\n
+You are an AI assistant that follows instruction extremely well. Help as much as you can.<|eot_id|><|start_header_id|>user<|end_header_id|>\n
+Summarise the following text in less than {length} words: "{text}"\n
+Summary:<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"""
