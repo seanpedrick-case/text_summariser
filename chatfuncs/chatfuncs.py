@@ -52,7 +52,7 @@ class CtransInitConfig_gpu:
                  seed=seed,
                  n_threads=threads,
                  n_batch=batch_size,
-                 n_ctx=32768,
+                 n_ctx=24576,
                  n_gpu_layers=gpu_layers):
 
         self.last_n_tokens = last_n_tokens

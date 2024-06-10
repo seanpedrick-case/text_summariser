@@ -3,158 +3,175 @@ import concurrent.futures
 import gradio as gr
 from chatfuncs.chatfuncs import model, CtransGenGenerationConfig, temperature
 from datetime import datetime
+from typing import Type
+
+from chatfuncs.helper_functions import output_folder
 
 today = datetime.now().strftime("%d%m%Y")
 today_rev = datetime.now().strftime("%Y%m%d")
 
-def summarise_text(text, text_df, length_slider, in_colname, model_type, progress=gr.Progress()):      
-         
-        if text_df.empty:
-            in_colname="text"
-            in_colname_list_first = in_colname
+PandasDataFrame = Type[pd.DataFrame]
 
-            in_text_df = pd.DataFrame({in_colname_list_first:[text]})
-            
-        else: 
-            in_text_df = text_df
-            in_colname_list_first = in_colname
+def summarise_text(text:str, text_df:PandasDataFrame, length_slider:int, in_colname:str, model_type:str, progress=gr.Progress()):
+    '''
+    Summarise a text or series of texts using Transformers of Llama.cpp
+    '''
 
-        print(model_type)
+    outputs = []
+    output_name = ""
+    output_name_parquet = ""     
+        
+    if text_df.empty:
+        in_colname="text"
+        in_colname_list_first = in_colname
 
-        texts_list = list(in_text_df[in_colname_list_first])
+        in_text_df = pd.DataFrame({in_colname_list_first:[text]})
+        
+    else: 
+        in_text_df = text_df
+        in_colname_list_first = in_colname
 
-        if model_type != "Phi 3 128k (larger, slow)":
-            summarised_texts = []
+    print(model_type)
 
-            for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
+    texts_list = list(in_text_df[in_colname_list_first])
 
-                summarised_text = model(single_text, max_length=length_slider)
+    if model_type != "Phi 3 128k (24k tokens max)":
+        summarised_texts = []
 
-                #print(summarised_text)
+        for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
 
-                summarised_text_str = summarised_text[0]['summary_text']
+            summarised_text = model(single_text, max_length=length_slider)
 
-                summarised_texts.append(summarised_text_str)
+            #print(summarised_text)
 
-                print(summarised_text_str)
+            summarised_text_str = summarised_text[0]['summary_text']
 
-                #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
+            summarised_texts.append(summarised_text_str)
 
-            #print(summarised_texts)
+            print(summarised_text_str)
 
-        if model_type == "Phi 3 128k (larger, slow)":
+            #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
 
-            gen_config = CtransGenGenerationConfig()
-            gen_config.update_temp(temperature)
+        #print(summarised_texts)
 
-            print(gen_config)
+    if model_type == "Phi 3 128k (24k tokens max)":
 
-            # Define a function that calls your model
-            # def call_model(formatted_string):#, vars):
-            #     return model(formatted_string)#, vars)
-            
-            def call_model(formatted_string, gen_config):
-                """
-                Calls your generation model with parameters from the CtransGenGenerationConfig object.
+        gen_config = CtransGenGenerationConfig()
+        gen_config.update_temp(temperature)
 
-                Args:
-                    formatted_string (str): The formatted input text for the model.
-                    gen_config (CtransGenGenerationConfig): An object containing generation parameters.
-                """
-                # Extracting parameters from the gen_config object
-                temperature = gen_config.temperature
-                top_k = gen_config.top_k
-                top_p = gen_config.top_p
-                repeat_penalty = gen_config.repeat_penalty
-                seed = gen_config.seed
-                max_tokens = gen_config.max_tokens
-                stream = gen_config.stream
+        print(gen_config)
 
-                # Now you can call your model directly, passing the parameters:
-                output = model(
-                    formatted_string, 
-                    temperature=temperature, 
-                    top_k=top_k, 
-                    top_p=top_p, 
-                    repeat_penalty=repeat_penalty, 
-                    seed=seed,
-                    max_tokens=max_tokens,
-                    stream=stream,
-                )
+        # Define a function that calls your model
+        # def call_model(formatted_string):#, vars):
+        #     return model(formatted_string)#, vars)
+        
+        def call_model(formatted_string, gen_config):
+            """
+            Calls your generation model with parameters from the CtransGenGenerationConfig object.
 
-                return output
+            Args:
+                formatted_string (str): The formatted input text for the model.
+                gen_config (CtransGenGenerationConfig): An object containing generation parameters.
+            """
+            # Extracting parameters from the gen_config object
+            temperature = gen_config.temperature
+            top_k = gen_config.top_k
+            top_p = gen_config.top_p
+            repeat_penalty = gen_config.repeat_penalty
+            seed = gen_config.seed
+            max_tokens = gen_config.max_tokens
+            stream = gen_config.stream
 
-            # Set your timeout duration (in seconds)
-            timeout_duration = 300  # Adjust this value as needed
+            # Now you can call your model directly, passing the parameters:
+            output = model(
+                formatted_string, 
+                temperature=temperature, 
+                top_k=top_k, 
+                top_p=top_p, 
+                repeat_penalty=repeat_penalty, 
+                seed=seed,
+                max_tokens=max_tokens,
+                stream=stream,
+            )
 
-            length = str(length_slider)
+            return output
 
-            from chatfuncs.prompts import instruction_prompt_phi3
+        # Set your timeout duration (in seconds)
+        timeout_duration = 300  # Adjust this value as needed
 
-            summarised_texts = []
+        length = str(length_slider)
 
-            for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
+        from chatfuncs.prompts import instruction_prompt_phi3
 
-                formatted_string = instruction_prompt_phi3.format(length=length, text=single_text)
+        summarised_texts = []
 
-                # Use ThreadPoolExecutor to enforce a timeout
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    #future = executor.submit(call_model, formatted_string)#, **vars(gen_config))
-                    future = executor.submit(call_model, formatted_string, gen_config)
-                    try:
-                        output = future.result(timeout=timeout_duration)
-                        # Process the output here
-                    except concurrent.futures.TimeoutError:
-                        error_text = f"Timeout (five minutes) occurred for text: {single_text}. Consider using a smaller model."
-                        print(error_text)
-                        return error_text, None
+        for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
 
-                print(output)
+            formatted_string = instruction_prompt_phi3.format(length=length, text=single_text)
 
-                output_str = output['choices'][0]['text']
+            # Use ThreadPoolExecutor to enforce a timeout
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                #future = executor.submit(call_model, formatted_string)#, **vars(gen_config))
+                future = executor.submit(call_model, formatted_string, gen_config)
+                try:
+                    output = future.result(timeout=timeout_duration)
+                    # Process the output here
+                except concurrent.futures.TimeoutError:
+                    error_text = f"Timeout (five minutes) occurred for text: {single_text}. Consider using a smaller model."
+                    print(error_text)
+                    return error_text, None
 
-                # Find the index of 'ASSISTANT: ' to select only text after this location
-                # index = output_str.find('ASSISTANT: ')
+            print(output)
 
-                # # Check if 'ASSISTANT: ' is found in the string
-                # if index != -1:
-                #     # Add the length of 'ASSISTANT: ' to the index to start from the end of this substring
-                #     start_index = index + len('ASSISTANT: ')
-                    
-                #     # Slice the string from this point to the end
-                #     assistant_text = output_str[start_index:]
-                # else:
-                #     assistant_text = "ASSISTANT: not found in text"
+            output_str = output['choices'][0]['text']
 
-                # print(assistant_text)
+            # Find the index of 'ASSISTANT: ' to select only text after this location
+            # index = output_str.find('ASSISTANT: ')
 
-                #summarised_texts.append(assistant_text)
-
-                summarised_texts.append(output_str)
-
-                #print(summarised_text)
+            # # Check if 'ASSISTANT: ' is found in the string
+            # if index != -1:
+            #     # Add the length of 'ASSISTANT: ' to the index to start from the end of this substring
+            #     start_index = index + len('ASSISTANT: ')
                 
-                #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
+            #     # Slice the string from this point to the end
+            #     assistant_text = output_str[start_index:]
+            # else:
+            #     assistant_text = "ASSISTANT: not found in text"
 
-        if text_df.empty:
-            #if model_type != "Phi 3 128k (larger, slow)":
-            summarised_text_out = summarised_texts[0]#.values()
+            # print(assistant_text)
 
-            #if model_type == "Phi 3 128k (larger, slow)":
-            #    summarised_text_out = summarised_texts[0]
+            #summarised_texts.append(assistant_text)
 
-        else: 
-            summarised_text_out = summarised_texts #[d['summary_text'] for d in summarised_texts] #summarised_text[0].values()
+            summarised_texts.append(output_str)
 
-        output_name = "summarise_output_" + today_rev + ".csv"
-        output_df = pd.DataFrame({"Original text":in_text_df[in_colname_list_first],
-                                    "Summarised text":summarised_text_out})
+            #print(summarised_text)
+            
+            #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
 
-        summarised_text_out_str = str(output_df["Summarised text"][0])#.str.replace("dict_values([","").str.replace("])",""))
+    if text_df.empty:
+        #if model_type != "Phi 3 128k (24k tokens max)":
+        summarised_text_out = summarised_texts[0]#.values()
 
-        output_df.to_csv(output_name, index = None)
+        #if model_type == "Phi 3 128k (24k tokens max)":
+        #    summarised_text_out = summarised_texts[0]
 
-        return summarised_text_out_str, output_name
+    else: 
+        summarised_text_out = summarised_texts #[d['summary_text'] for d in summarised_texts] #summarised_text[0].values()
+
+    output_name = output_folder + "summarise_output_" + today_rev + ".csv"
+    output_name_parquet = output_folder + "summarise_output_" + today_rev + ".parquet"
+    output_df = pd.DataFrame({"Original text":in_text_df[in_colname_list_first],
+                                "Summarised text":summarised_text_out})
+
+    summarised_text_out_str = str(output_df["Summarised text"][0])#.str.replace("dict_values([","").str.replace("])",""))
+
+    output_df.to_csv(output_name, index = None)
+    output_df.to_parquet(output_name_parquet, index = None)
+
+    outputs.append(output_name)
+    outputs.append(output_name_parquet)
+
+    return summarised_text_out_str, outputs
 
 
 # def summarise_text(text, text_df, length_slider, in_colname, model_type, progress=gr.Progress()):      
@@ -173,7 +190,7 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type, progres
 
 #         texts_list = list(in_text_df[in_colname_list_first])
 
-#         if model_type != "Phi 3 128k (larger, slow)":
+#         if model_type != "Phi 3 128k (24k tokens max)":
 #             summarised_texts = []
 
 #             for single_text in progress.tqdm(texts_list, desc = "Summarising texts", unit = "texts"):
@@ -191,7 +208,7 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type, progres
 
 #             #print(summarised_texts)
 
-#         if model_type == "Phi 3 128k (larger, slow)":
+#         if model_type == "Phi 3 128k (24k tokens max)":
 
 
 #             # Define a function that calls your model
@@ -248,10 +265,10 @@ def summarise_text(text, text_df, length_slider, in_colname, model_type, progres
 #                 #pd.Series(summarised_texts).to_csv("summarised_texts_out.csv")
 
 #         if text_df.empty:
-#             #if model_type != "Phi 3 128k (larger, slow)":
+#             #if model_type != "Phi 3 128k (24k tokens max)":
 #             summarised_text_out = summarised_texts[0]#.values()
 
-#             #if model_type == "Phi 3 128k (larger, slow)":
+#             #if model_type == "Phi 3 128k (24k tokens max)":
 #             #    summarised_text_out = summarised_texts[0]
 
 #         else: 

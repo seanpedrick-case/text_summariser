@@ -12,6 +12,36 @@ import getpass
 import gzip
 import pickle
 
+def get_or_create_env_var(var_name, default_value):
+    # Get the environment variable if it exists
+    value = os.environ.get(var_name)
+    
+    # If it doesn't exist, set it to the default value
+    if value is None:
+        os.environ[var_name] = default_value
+        value = default_value
+    
+    return value
+
+# Retrieving or setting output folder
+env_var_name = 'GRADIO_OUTPUT_FOLDER'
+default_value = 'output/'
+
+output_folder = get_or_create_env_var(env_var_name, default_value)
+print(f'The value of {env_var_name} is {output_folder}')
+
+def ensure_output_folder_exists(output_folder):
+    """Checks if the output folder exists, creates it if not."""
+
+    folder_name = output_folder
+
+    if not os.path.exists(folder_name):
+        # Create the folder if it doesn't exist
+        os.makedirs(folder_name)
+        print(f"Created the output folder:", folder_name)
+    else:
+        print(f"The output folder already exists:", folder_name)
+
 # Attempt to delete content of gradio temp folder
 def get_temp_folder_path():
     username = getpass.getuser()

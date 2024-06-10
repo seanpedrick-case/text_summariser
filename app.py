@@ -14,8 +14,10 @@ PandasDataFrame = Type[pd.DataFrame]
 import chatfuncs.chatfuncs as chatf
 import chatfuncs.summarise_funcs as sumf
 
-from chatfuncs.helper_functions import dummy_function, put_columns_in_df
+from chatfuncs.helper_functions import dummy_function, put_columns_in_df, output_folder, ensure_output_folder_exists
 from chatfuncs.summarise_funcs import summarise_text
+
+ensure_output_folder_exists(output_folder)
 
 # Disable cuda devices if necessary
 #os.environ['CUDA_VISIBLE_DEVICES'] = '-1' 
@@ -34,11 +36,28 @@ else:
 
 print("Device used is: ", torch_device)
 
-def create_hf_model(model_name):
+def create_hf_model(model_name, local_model_dir="model/t5_long"):
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length = chatf.context_length)
+    # Construct the expected local model path
+    local_model_path = os.path.join(local_model_dir, model_name)
 
-    summariser = pipeline("summarization", model=model_name, tokenizer=tokenizer) # philschmid/bart-large-cnn-samsum    
+    # Check if the model directory exists
+    if os.path.exists(local_model_path):
+        print(f"Model '{model_name}' found locally at: {local_model_path}")
+        
+        # Load tokenizer and pipeline from local path
+        tokenizer = AutoTokenizer.from_pretrained(local_model_path, model_max_length=chatf.context_length) 
+        summariser = pipeline("summarization", model=local_model_path, tokenizer=tokenizer) 
+
+    else:
+        print(f"Downloading model '{model_name}' from Hugging Face Hub...")
+        
+        # Download tokenizer and pipeline from Hugging Face Hub
+        tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length=chatf.context_length)
+        summariser = pipeline("summarization", model=model_name, tokenizer=tokenizer)
+
+        # Save the model locally (optional, but recommended for future use)
+        #summariser.save_pretrained(local_model_path) 
 
     return summariser, tokenizer, model_name
 
@@ -53,7 +72,7 @@ def load_model(model_type, gpu_layers, gpu_config=None, cpu_config=None, torch_d
     if torch_device is None:
         torch_device = chatf.torch_device
 
-    if model_type == "Phi 3 128k (larger, slow)":
+    if model_type == "Phi 3 128k (24k tokens max)":
         if torch_device == "cuda":
             gpu_config.update_gpu(gpu_layers)
             print("Loading with", gpu_config.n_gpu_layers, "model layers sent to GPU.")
@@ -66,38 +85,43 @@ def load_model(model_type, gpu_layers, gpu_config=None, cpu_config=None, torch_d
         print(vars(gpu_config))
         print(vars(cpu_config))
 
+        def get_model_path():
+            repo_id = os.environ.get("REPO_ID", "QuantFactory/Phi-3-mini-128k-instruct-GGUF")
+            filename = os.environ.get("MODEL_FILE", "Phi-3-mini-128k-instruct.Q4_K_M.gguf")
+            model_dir = "model/phi"  # Assuming this is your intended directory
+
+            # Construct the expected local path
+            local_path = os.path.join(model_dir, filename)
+
+            if os.path.exists(local_path):
+                print(f"Model already exists at: {local_path}")
+                return local_path
+            else:
+                print(f"Checking default Hugging Face folder. Downloading model from Hugging Face Hub if not found")
+                return hf_hub_download(repo_id=repo_id, filename=filename)
+                                       
+        model_path = get_model_path()
+        
+
         try:
-            summariser = Llama(
-            model_path=hf_hub_download(
-            repo_id=os.environ.get("REPO_ID", "QuantFactory/Phi-3-mini-128k-instruct-GGUF"),# "QuantFactory/Phi-3-mini-128k-instruct-GGUF"), # "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF-v2"), #"microsoft/Phi-3-mini-4k-instruct-gguf"),#"TheBloke/Mistral-7B-OpenOrca-GGUF"),
-            filename=os.environ.get("MODEL_FILE", "Phi-3-mini-128k-instruct.Q4_K_M.gguf") #"Phi-3-mini-128k-instruct.Q4_K_M.gguf")  #"Meta-Llama-3-8B-Instruct-v2.Q6_K.gguf") #"Phi-3-mini-4k-instruct-q4.gguf")#"mistral-7b-openorca.Q4_K_M.gguf"),
-        ),
-        **vars(gpu_config) # change n_gpu_layers if you have more or less VRAM 
-        )
+            summariser = Llama(model_path=model_path, **vars(gpu_config))
         
         except Exception as e:
             print("GPU load failed")
             print(e)
-            summariser = Llama(
-            model_path=hf_hub_download(
-            repo_id=os.environ.get("REPO_ID", "QuantFactory/Phi-3-mini-128k-instruct-GGUF"), #"QuantFactory/Phi-3-mini-128k-instruct-GGUF"), #, "microsoft/Phi-3-mini-4k-instruct-gguf"),#"QuantFactory/Meta-Llama-3-8B-Instruct-GGUF-v2"), #"microsoft/Phi-3-mini-4k-instruct-gguf"),#"TheBloke/Mistral-7B-OpenOrca-GGUF"),
-            filename=os.environ.get("MODEL_FILE", "Phi-3-mini-128k-instruct.Q4_K_M.gguf"), # "Phi-3-mini-128k-instruct.Q4_K_M.gguf") # , #"Meta-Llama-3-8B-Instruct-v2.Q6_K.gguf") #"Phi-3-mini-4k-instruct-q4.gguf"),#"mistral-7b-openorca.Q4_K_M.gguf"),
-        ),
-        **vars(cpu_config)
-        )
+            summariser = Llama(model_path=model_path, **vars(cpu_config))
 
         tokenizer = []
 
     if model_type == "Flan T5 Large Stacked Samsum 1k":
         # Huggingface chat model
-        hf_checkpoint = 'stacked-summaries/flan-t5-large-stacked-samsum-1024'#'declare-lab/flan-alpaca-base' # # #
-
-        summariser, tokenizer, model_type = create_hf_model(model_name = hf_checkpoint)
+        hf_checkpoint = 'stacked-summaries/flan-t5-large-stacked-samsum-1024'
+        summariser, tokenizer, model_type = create_hf_model(model_name = hf_checkpoint, local_model_dir="model/t5_stacked")
 
     if model_type == "Long T5 Global Base 16k Book Summary":
         # Huggingface chat model
-        hf_checkpoint = 'pszemraj/long-t5-tglobal-base-16384-book-summary' #'philschmid/flan-t5-small-stacked-samsum'#'declare-lab/flan-alpaca-base' # # #
-        summariser, tokenizer, model_type = create_hf_model(model_name = hf_checkpoint)
+        hf_checkpoint = 'pszemraj/long-t5-tglobal-base-16384-book-summary'
+        summariser, tokenizer, model_type = create_hf_model(model_name = hf_checkpoint, local_model_dir="model/t5_long")
 
     sumf.model = summariser
     sumf.tokenizer = tokenizer
@@ -109,7 +133,7 @@ def load_model(model_type, gpu_layers, gpu_config=None, cpu_config=None, torch_d
     return model_type, load_confirmation, model_type
 
 # Both models are loaded on app initialisation so that users don't have to wait for the models to be downloaded
-model_type = "Phi 3 128k (larger, slow)"
+model_type = "Phi 3 128k (24k tokens max)"
 load_model(model_type, chatf.gpu_layers, chatf.gpu_config, chatf.cpu_config, chatf.torch_device)
 
 model_type = "Flan T5 Large Stacked Samsum 1k"
@@ -133,7 +157,7 @@ with block:
     gr.Markdown(
     """
     # Text summariser
-    Enter open text below to get a summary. You can copy and paste text directly, or upload a file and specify the column that you want to summarise. The default small model will be able to summarise up to about 16,000 words, but the quality may not be great. The larger model around 900 words of better quality. Summarisation with Phi 3 128k works on up to around 4,000 words, and may give a higher quality summary, but will be slow, and it may not respect your desired maximum word count.
+    Enter open text below to get a summary. You can copy and paste text directly, or upload a file and specify the column that you want to summarise. The default small model will be able to summarise up to about 12,000 words, but the quality may not be great. The larger model around 800 words of better quality. Summarisation with Phi 3 128k works on up to around 20,000 words (suitable for a 12Gb graphics card without out of memory issues), and may give a higher quality summary, but will be slow, and it may not respect your desired maximum word count.
     """)    
     
     with gr.Tab("Summariser"):
@@ -149,7 +173,7 @@ with block:
         with gr.Row():
             summarise_btn = gr.Button("Summarise", variant="primary")
             stop = gr.Button(value="Interrupt processing", variant="secondary", scale=0)
-            length_slider = gr.Slider(minimum = 30, maximum = 500, value = 100, step = 10, label = "Maximum length of summary")
+            length_slider = gr.Slider(minimum = 30, maximum = 1000, value = 500, step = 10, label = "Maximum length of summary (in words)")
         
         with gr.Row():
             output_single_text = gr.Textbox(label="Output example (first example in dataset)")
@@ -157,12 +181,12 @@ with block:
 
     with gr.Tab("Advanced features"):
         with gr.Row():
-            model_choice = gr.Radio(label="Choose a summariser model", value="Long T5 Global Base 16k Book Summary", choices = ["Long T5 Global Base 16k Book Summary", "Flan T5 Large Stacked Samsum 1k", "Phi 3 128k (larger, slow)"])
+            model_choice = gr.Radio(label="Choose a summariser model", value="Long T5 Global Base 16k Book Summary", choices = ["Long T5 Global Base 16k Book Summary", "Flan T5 Large Stacked Samsum 1k", "Phi 3 128k (24k tokens max)"])
             change_model_button = gr.Button(value="Load model", scale=0)
         with gr.Accordion("Choose number of model layers to send to GPU (WARNING: please don't modify unless you are sure you have a GPU).", open = False):
             gpu_layer_choice = gr.Slider(label="Choose number of model layers to send to GPU.", value=0, minimum=0, maximum=100, step = 1, visible=True)
         with gr.Accordion("LLM parameters"):
-            temp_slide = gr.Slider(minimum=0.1, value = 0.5, maximum=1, step=0.1, label="Choose temperature setting for response generation.")
+            temp_slide = gr.Slider(minimum=0.1, value = 0.5, maximum=1, step=0.1, label="Choose temperature setting for response generation.", interactive=True)
 
         load_text = gr.Text(label="Load status")
 
@@ -172,7 +196,7 @@ with block:
     change_model_button.click(fn=load_model, inputs=[model_choice, gpu_layer_choice], outputs = [model_type_state, load_text, current_model])
 
     summarise_click = summarise_btn.click(fn=summarise_text, inputs=[in_text, data_state, length_slider, in_colname, model_type_state],
-                       outputs=[output_single_text, output_file], api_name="summarise_single_text")
+                       outputs=[output_single_text, output_file], api_name="summarise")
     # summarise_enter = summarise_btn.submit(fn=summarise_text, inputs=[in_text, data_state, length_slider, in_colname, model_type_state],
     #                    outputs=[output_single_text, output_file])
     
@@ -184,7 +208,7 @@ with block:
     # Dummy function to allow dropdown modification to work correctly (strange thing needed for Gradio 3.50, will be deprecated upon upgrading Gradio version)
     in_colname.change(dummy_function, in_colname, None)
 
-block.queue().launch()
+block.queue().launch(show_error=True)
 
 # def load_model(model_type, gpu_layers, gpu_config=None, cpu_config=None, torch_device=None):
 #     print("Loading model ", model_type)
@@ -197,7 +221,7 @@ block.queue().launch()
 #     if torch_device is None:
 #         torch_device = chatf.torch_device
 
-#     if model_type == "Phi 3 128k (larger, slow)":
+#     if model_type == "Phi 3 128k (24k tokens max)":
 #         hf_checkpoint = 'NousResearch/Nous-Capybara-7B-V1.9-GGUF'
 
 #         if torch_device == "cuda":
